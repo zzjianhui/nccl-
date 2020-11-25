@@ -55,6 +55,7 @@ ncclResult_t ncclTopoTrimXml(struct ncclXml* xml);
 /* Functions  */
 /**************/
 
+/*  */
 static ncclResult_t xmlGetAttrIndex(struct ncclXmlNode* node, const char* attrName, int* index) {
   *index = -1;
   const int nAttrs = node->nAttrs;
@@ -82,6 +83,8 @@ static ncclResult_t xmlGetAttrStr(struct ncclXmlNode* node, const char* attrName
   }
   return ncclSuccess;
 }
+
+/* 从node中获取key为attrName的value，放入到变量value中 */
 static ncclResult_t xmlGetAttrInt(struct ncclXmlNode* node, const char* attrName, int* value) {
   const char* str;
   NCCLCHECK(xmlGetAttrStr(node, attrName, &str));
@@ -137,6 +140,7 @@ static ncclResult_t xmlSetAttr(struct ncclXmlNode* node, const char* attrName, c
   return ncclSuccess;
 }
 
+/* 为node内的结构体attrs赋值 */
 static ncclResult_t xmlSetAttrInt(struct ncclXmlNode* node, const char* attrName, const int value) {
   int index;
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
@@ -145,7 +149,7 @@ static ncclResult_t xmlSetAttrInt(struct ncclXmlNode* node, const char* attrName
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
-  snprintf(node->attrs[index].value, MAX_STR_LEN, "%d", value);
+  snprintf(node->attrs[index].value, MAX_STR_LEN, "%d", value);//int转换成char*有这么难吗？
   node->attrs[index].value[MAX_STR_LEN] = '\0';
   return ncclSuccess;
 }
@@ -208,6 +212,7 @@ static ncclResult_t xmlGetSubKvInt(struct ncclXmlNode* node, const char* subName
   return ncclSuccess;
 }
 
+/* Assign value to variable xml */
 static ncclResult_t xmlAddNode(struct ncclXml* xml, struct ncclXmlNode* parent, const char* subName, struct ncclXmlNode** sub) {
   if (xml->maxIndex == MAX_NODES) {
     WARN("Error : too many XML nodes (max %d)", MAX_NODES);

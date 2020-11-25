@@ -18,8 +18,9 @@ struct ncclTopoNodeList {
   int count;
 };
 
+/*  */
 static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* node, int t, int64_t id, struct ncclTopoLinkList** path) {
-  for (int i=0; i<system->nodes[t].count; i++) {
+  for (int i=0; i<system->nodes[t].count; i++) {//对于所有的cpu设备
     if (system->nodes[t].nodes[i].id == id) {
       *path = node->paths[t]+i;
       return ncclSuccess;
@@ -30,6 +31,7 @@ static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* 
 }
 
 static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclTopoSystem* system) {
+  //为baseNode->paths[baseNode.type]这个变量，为一维数组，进行初始化。
   if (baseNode->paths[baseNode->type] == NULL) {
     NCCLCHECK(ncclCalloc(baseNode->paths+baseNode->type, system->nodes[baseNode->type].count));
   }
@@ -39,6 +41,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
   struct ncclTopoNodeList nextNodeList;
   nodeList.count = 1; nodeList.list[0] = baseNode;
   nextNodeList.count = 0;
+  //将指向自己的path进行赋值
   struct ncclTopoLinkList* basePath;
   NCCLCHECK(getPath(system, baseNode, baseNode->type, baseNode->id, &basePath));
   basePath->count = 0;
@@ -50,7 +53,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
     for (int n=0; n<nodeList.count; n++) {
       struct ncclTopoNode* node = nodeList.list[n];
       struct ncclTopoLinkList* path;
-      NCCLCHECK(getPath(system, node, baseNode->type, baseNode->id, &path));
+      NCCLCHECK(getPath(system, node, baseNode->type, baseNode->id, &path));//获取node指向
       for (int l=0; l<node->nlinks; l++) {
         struct ncclTopoLink* link = node->links+l;
         struct ncclTopoNode* remNode = link->remNode;
@@ -188,9 +191,10 @@ static ncclResult_t addCpuStep(struct ncclTopoSystem* system, int c, int t1, int
 
 // Remove/free paths for a given type
 static void ncclTopoRemovePathType(struct ncclTopoSystem* system, int nodeType) {
+  //遍历所有的设备node，释放每个node下的paths空间，并将其设置为NULL
   for (int t=0; t<NCCL_TOPO_NODE_TYPES; t++) {
     // Remove links _to_ the given type
-    for (int n=0; n<system->nodes[t].count; n++) {
+    for (int n=0; n<system->nodes[t].count; n++) { //将该t类型下的所有设备的paths都设置为NULL
       struct ncclTopoNode* node = system->nodes[t].nodes+n;
       free(node->paths[nodeType]);
       node->paths[nodeType] = NULL;
@@ -348,10 +352,11 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int 
   return ncclSuccess;
 }
 
+/*  */
 ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeerInfo* peerInfos) {
   // Precompute paths between GPUs/NICs.
 
-  // Remove everything in case we're re-computing
+  // Remove everything in case we're re-computing，将所有节点下的paths都指向NULL
   for (int t=0; t<NCCL_TOPO_NODE_TYPES; t++) ncclTopoRemovePathType(system, t);
 
   // Set direct paths from/to CPUs. We need them in many cases.
@@ -360,15 +365,15 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
   }
 
   // Set direct paths from/to GPUs.
-  for (int g=0; g<system->nodes[GPU].count; g++) {
+  for (int g=0; g<system->nodes[GPU].count; g++) {//遍历GPU
     // Compute paths to GPU g
-    NCCLCHECK(ncclTopoSetPaths(system->nodes[GPU].nodes+g, system));
+    NCCLCHECK(ncclTopoSetPaths(system->nodes[GPU].nodes+g, system));//所有GPU设备node，执行该函数
 
-    // Update path when we don't want to / can't use GPU Direct P2P
+    // Update path when we don't want to / can't use GPU Direct P2P，若无法使用p2p
     for (int p=0; p<system->nodes[GPU].count; p++) {
       int p2p;
       NCCLCHECK(ncclTopoCheckP2p(system, system->nodes[GPU].nodes[p].id, system->nodes[GPU].nodes[g].id, &p2p, NULL, NULL));
-      if (p2p == 0) {
+      if (p2p == 0) {//表示不能使用p2p
         // Divert all traffic through the CPU
         int cpu;
         NCCLCHECK(getLocalCpu(system, g, &cpu));

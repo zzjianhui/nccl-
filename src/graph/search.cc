@@ -31,6 +31,8 @@ static float getTotalWidth(struct ncclTopoSystem* system, struct ncclTopoNode* g
   }
   return std::max(pciWidth, nvlinkWidth);
 }
+
+/* 设置system参数的maxWidth和totalWidth两个变量 */
 ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
   system->maxWidth = 0.0;
   system->totalWidth = 0.0;
@@ -39,7 +41,7 @@ ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
     system->maxWidth = LOC_WIDTH;
     return ncclSuccess;
   }
-  for (int g=0; g<system->nodes[GPU].count; g++) {
+  for (int g=0; g<system->nodes[GPU].count; g++) {//遍历GPU
     struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
     system->maxWidth = std::max(system->maxWidth, getMaxWidth(system, gpu, inter ? NET : GPU));
     system->totalWidth = std::max(system->totalWidth, getTotalWidth(system, gpu));
@@ -66,7 +68,7 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
   float pciSpeed = speed;
   for (int step=0; step<path->count; step++) {
     struct ncclTopoNode* node = path->list[step]->remNode;
-    if (node->type == CPU) {
+    if (nCPUode->type == ) {
       // Account for P2P inefficiency through Intel CPU RC
       if (path->type == PATH_PHB && start->type == GPU &&
           node->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 &&
@@ -110,7 +112,7 @@ static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncc
 
   // Now check link type
   *node = NULL;
-  int intra = type1 == GPU && type2 == GPU;
+  int intra = type1 == GPU && type2 == GPU; //当type1和type2都为GPU
   float speed = intra ? graph->speedIntra : graph->speedInter;
   int type = intra ? graph->typeIntra : graph->typeInter;
 
@@ -652,16 +654,16 @@ float speedArray[] = { 42.0, 30.0, 24.0, 21.0, 18.0, 15.0, 12.0, 10.0, 9.0, 7.0,
 #define NSPEEDS (sizeof(speedArray)/sizeof(float))
 
 ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph) {
-  int ngpus = system->nodes[GPU].count;
+  int ngpus = system->nodes[GPU].count;//获取gpu的个数
   int crossNic = (system->nodes[NET].count > 1) && graph->crossNic ? 1 : 0;
   graph->speedIntra = graph->speedInter = 0;
-  if (graph->crossNic == 2) graph->crossNic = 0;
-  graph->typeIntra = ngpus == 1 ? PATH_LOC : PATH_NVL;
+  if (graph->crossNic == 2) graph->crossNic = 0; //这段代码是否可以删除
+  graph->typeIntra = ngpus == 1 ? PATH_LOC : PATH_NVL;//若GPU个数为1
   graph->typeInter = PATH_PIX;
   graph->nChannels = 0;
   graph->sameChannels = 1;
 
-  char* str = getenv("NCCL_GRAPH_FILE");
+  char* str = getenv("NCCL_GRAPH_FILE");//查看本地是否保存了graph数据结构
   if (str) {
     INFO(NCCL_ENV, "NCCL_GRAPH_FILE set by environment to %s", str);
     struct ncclXml* xml;
@@ -678,7 +680,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
 
   // SPLIT_TREE works better on older archs.
   int ccMin;
-  NCCLCHECK(ncclTopoGetCompCap(system, &ccMin, NULL));
+  NCCLCHECK(ncclTopoGetCompCap(system, &ccMin, NULL));//获取所有GPU中SM最小值
   if (ccMin < 80 && graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE) graph->pattern = NCCL_TOPO_PATTERN_SPLIT_TREE;
 
   struct ncclTopoGraph tmpGraph;

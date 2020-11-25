@@ -552,6 +552,7 @@ static ncclResult_t checkCollNetSetup(struct ncclComm* comm, int rank, int collN
 NCCL_PARAM(CrossNic, "CROSS_NIC", 2);
 NCCL_PARAM(GraphDumpFileRank, "GRAPH_DUMP_FILE_RANK", 0);
 
+/* 函数名称，初始化传输等级 */
 static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* commId) {
   // We use 2 AllGathers
   // 1. { peerInfo, comm, compCap}
@@ -623,7 +624,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
 
   // AllGather1 - end
 
-  // Topo detection / System graph creation
+  /*  */
+  // Topo detection / System graph creation（设置变量comm->topo的值，除了paths）
   NCCLCHECK(ncclTopoGetSystem(comm, &comm->topo));
   // Compute paths between GPUs and NICs
   NCCLCHECK(ncclTopoComputePaths(comm->topo, comm->peerInfo));
