@@ -15,7 +15,7 @@
 static float getMaxWidth(struct ncclTopoSystem* system, struct ncclTopoNode* gpu, int type) {
   float maxWidth = 0.0;
   for (int i=0; i<system->nodes[type].count; i++) {
-    struct ncclTopoLinkList* path = gpu->paths[type]+i;
+    struct ncclTopoLinkList* path = gpu->paths[type]+i;//从该gpu node到指定设备的路径
     float width = path->width;
     if (path->count == 0) continue;
     maxWidth = std::max(maxWidth, width);
@@ -32,7 +32,11 @@ static float getTotalWidth(struct ncclTopoSystem* system, struct ncclTopoNode* g
   return std::max(pciWidth, nvlinkWidth);
 }
 
-/* 设置system参数的maxWidth和totalWidth两个变量 */
+/*
+ * 设置system参数的maxWidth和totalWidth两个变量 
+ * maxWidth表示，获取各个gpu node到net node的width取最大
+ * totalWidth表示，每个gpu node到pci node的width总和
+ */
 ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
   system->maxWidth = 0.0;
   system->totalWidth = 0.0;
@@ -42,7 +46,7 @@ ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
     return ncclSuccess;
   }
   for (int g=0; g<system->nodes[GPU].count; g++) {//遍历GPU
-    struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
+    struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;//获得每个gpu node
     system->maxWidth = std::max(system->maxWidth, getMaxWidth(system, gpu, inter ? NET : GPU));
     system->totalWidth = std::max(system->totalWidth, getTotalWidth(system, gpu));
   }
@@ -64,12 +68,13 @@ static ncclResult_t findRevLink(struct ncclTopoNode* node1, struct ncclTopoNode*
 // This is unfortunately needed since manipulating floats often results in rounding errors.
 #define SUB_ROUND(a, b) (a = roundf((a-b)*1000)/1000)
 
+//
 static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNode* start, int maxSteps, float speed, int* steps) {
   float pciSpeed = speed;
-  for (int step=0; step<path->count; step++) {
+  for (int step=0; step<path->count; step++) { //首先遍历该路径的所有link，若该路径的头节点为gpu，并且该路径沿途经过cpu，获得pciSpeed
     struct ncclTopoNode* node = path->list[step]->remNode;
-    if (nCPUode->type == ) {
-      // Account for P2P inefficiency through Intel CPU RC
+    if (node->type == CPU) {
+      // Account for P2P inefficiency through Intel CPU RC，path->type为PHB？？？
       if (path->type == PATH_PHB && start->type == GPU &&
           node->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 &&
           node->cpu.vendor == NCCL_TOPO_CPU_VENDOR_INTEL) {
@@ -79,10 +84,10 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
   }
 
   struct ncclTopoNode* node = start;
-  for (int step=0; step<maxSteps; step++) {
+  for (int step=0; step<maxSteps; step++) { //遍历所有路径
     struct ncclTopoLink* link = path->list[step];
     struct ncclTopoLink* revLink = NULL;
-    float fwSpeed = link->type == LINK_PCI ? pciSpeed : speed;
+    float fwSpeed = link->type == LINK_PCI ? pciSpeed : speed;//仅在pci -> cpu的路径上，才会选择pciSpeed
     float revSpeed = 0;
     if (link->remNode->type == GPU && link->remNode->gpu.cudaCompCap < 80 && start->type != GPU) {
       if (revLink == NULL) NCCLCHECK(findRevLink(node, link->remNode, &revLink));
@@ -811,7 +816,7 @@ done:
 
 ncclResult_t ncclTopoPrintGraph(struct ncclTopoSystem* system, struct ncclTopoGraph* graph) {
   INFO(NCCL_GRAPH, "Pattern %d, crossNic %d, nChannels %d, speed %f/%f, type %s/%s, sameChannels %d", graph->pattern, graph->crossNic, graph->nChannels, graph->speedIntra, graph->speedInter, topoPathTypeStr[graph->typeIntra], topoPathTypeStr[graph->typeInter], graph->sameChannels);
-  int ngpus = system->nodes[GPU].count;
+  int ngpus = system->nodes[GPU].count; //获取gpu个数
 
   char line[1024];
   for (int c=0; c<graph->nChannels; c++) {

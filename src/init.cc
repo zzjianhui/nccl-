@@ -624,7 +624,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
 
   // AllGather1 - end
 
-  /*  */
+  /* 设置变量system */
   // Topo detection / System graph creation（设置变量comm->topo的值，除了paths）
   NCCLCHECK(ncclTopoGetSystem(comm, &comm->topo));
   // Compute paths between GPUs and NICs

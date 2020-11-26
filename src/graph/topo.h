@@ -11,6 +11,7 @@
 #include "core.h"
 #include <sched.h>
 
+//猜测，下面的值的单位为GB/s
 #define LOC_WIDTH 5000.0
 #define SM60_NVLINK_WIDTH 18.0
 #define SM70_NVLINK_WIDTH 21.0

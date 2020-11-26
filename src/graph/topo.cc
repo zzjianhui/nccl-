@@ -83,6 +83,7 @@ enum ncclNvLinkDeviceType {
   ncclNvLinkDeviceBridge, // IBM/Power NVLink bridge (Device 04ea)
 };
 
+//获取id为输入参数id的node
 ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id) {
   for (int i=0; i<system->nodes[type].count; i++) {
     if (system->nodes[type].nodes[i].id == id) {
@@ -93,7 +94,7 @@ ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode*
   return ncclSuccess;
 }
 
-/* 将变量node与system管理，然后根据输入的参数对其初始化 */
+/* 添加node节点进入变量system，然后根据输入的参数对其初始化 */
 ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id) {
   if (system->nodes[type].count == NCCL_TOPO_MAX_NODES) {
     WARN("Error : tried to create too many nodes of type %d\n", type);
@@ -199,7 +200,7 @@ static ncclResult_t ncclTopoPrintRec(struct ncclTopoNode* node, struct ncclTopoN
   INFO(NCCL_GRAPH, "%s", line);
   for (int i=0; i<offset; i++) line[i] = ' ';
 
-  for (int l=0; l<node->nlinks; l++) {
+  for (int l=0; l<node->nlinks; l++) {//遍历所有node下面连接的link
     struct ncclTopoLink* link = node->links+l;
     if (link->type == LINK_LOC) continue;
     if (link->type != LINK_PCI || link->remNode != prevNode) {
@@ -229,12 +230,13 @@ ncclResult_t ncclTopoPrint(struct ncclTopoSystem* s) {
   return ncclSuccess;
 }
 
-/* 将pci指向cpu的links，放到links数组的末尾 */
+// 对cpu下的pci，nic，gpu等除cpu设备，downNode指向upNode（cpu node）的link向后移动
 static ncclResult_t ncclTopoSort(struct ncclTopoNode* node, struct ncclTopoNode* upNode) {
+  //
   // Shift all links to have upLink as last link
   if (upNode) {
     int l=0;
-    while (node->links[l].remNode != upNode) l++;
+    while (node->links[l].remNode != upNode) l++;//寻找指向upNode的link
     struct ncclTopoLink upLink;
     memcpy(&upLink, node->links+l, sizeof(struct ncclTopoLink));
     while (node->links[l+1].remNode) {
@@ -246,7 +248,8 @@ static ncclResult_t ncclTopoSort(struct ncclTopoNode* node, struct ncclTopoNode*
 
   // Recursively sort the PCI tree
   for (int l=0; l<node->nlinks; l++) {
-    struct ncclTopoLink* link = node->links+l;
+    struct ncclTopoLink* link = node->links+l;//遍历node的所有link
+    //如果cpu的link不是指向其他cpu的，向下递归
     if (link->type == LINK_PCI && link->remNode != upNode) NCCLCHECK(ncclTopoSort(link->remNode, node));
   }
   return ncclSuccess;
@@ -290,6 +293,7 @@ ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* s
   return ncclSuccess;
 }
 
+// 从xml中获取nic的参数，放入到node nic中
 ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* system, struct ncclTopoNode* nic) {
   for (int s=0; s<xmlNic->nSubs; s++) {
     struct ncclXmlNode* xmlNet = xmlNic->subs[s];
@@ -302,6 +306,7 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
   return ncclSuccess;
 }
 
+// 将从xml中获取的内容放入到该gpu node中
 ncclResult_t ncclTopoAddGpu(struct ncclXmlNode* xmlGpu, struct ncclTopoSystem* system, struct ncclTopoNode* gpu) {
   NCCLCHECK(xmlGetAttrInt(xmlGpu, "sm", &gpu->gpu.cudaCompCap));
   NCCLCHECK(xmlGetAttrInt(xmlGpu, "rank", &gpu->gpu.rank));
@@ -315,6 +320,7 @@ struct kvDict kvDictPciClass[] = { { "0x060400", PCI }, { "0x068000", NVS }, { "
 struct kvDict kvDictPciGen[] = { { "2.5 GT/s", 15 }, { "5 GT/s", 30 }, { "8 GT/s", 60 }, { "16 GT/s", 120 }, { NULL, 60 /* Default fallback */ } }; // x100 Mbps per lane
 /* 探测pci设备，并探测pci下的gpu设备，将其放入变量system中 */
 ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* system, struct ncclTopoNode* parent) {
+  //1. 获取pci信息
   const char* str;
 
   int type;
@@ -325,20 +331,27 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
   NCCLCHECK(xmlGetAttrStr(xmlPci, "busid", &str));
   NCCLCHECK(busIdToInt64(str, &busId));
 
+  //2. 获取该pci下的gpu，若该pci下存在gpu
+  //   调用函数ncclTopoCreateNode，创建gpu node，并给该gpu下对应的link赋1个指向自己的值
+  //   从xml中获取gpu的信息，然后放入gpu node中
   struct ncclTopoNode* node = NULL;
   struct ncclXmlNode* xmlGpu = NULL;
-  NCCLCHECK(xmlGetSub(xmlPci, "gpu", &xmlGpu));
+  NCCLCHECK(xmlGetSub(xmlPci, "gpu", &xmlGpu)); //获取该pci下名称为gpu的设备
   if (xmlGpu != NULL) {
     type = GPU;
     int index;
     NCCLCHECK(xmlGetAttrIndex(xmlGpu, "rank", &index));
     if (index == -1) return ncclSuccess;
-    NCCLCHECK(ncclTopoCreateNode(system, &node, type, busId));
+    NCCLCHECK(ncclTopoCreateNode(system, &node, type, busId));//创建gpu node，busId表示该gpu在按个pcie上
     NCCLCHECK(ncclTopoAddGpu(xmlGpu, system, node));
   }
+
+  //3. 获取pci下的nic，若该pci下有nic
+  //   为nic node赋值
+  //   若该pci下还是pci，添加pci
   struct ncclXmlNode* xmlNic = NULL;
   NCCLCHECK(xmlGetSub(xmlPci, "nic", &xmlNic));
-  if (xmlNic != NULL) {
+  if (xmlNic != NULL) {//获取成功
     type = NIC;
     // Ignore sub device ID and merge multi-port NICs into one PCI device.
     busId &= 0xfffffffffffffff0;
@@ -353,7 +366,7 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
     NCCLCHECK(ncclTopoCreateNode(system, &node, type, busId));
     for (int s=0; s<xmlPci->nSubs; s++) {
       struct ncclXmlNode* xmlSubPci = xmlPci->subs[s];
-      NCCLCHECK(ncclTopoAddPci(xmlSubPci, system, node));
+      NCCLCHECK(ncclTopoAddPci(xmlSubPci, system, node)); //最上层是cpu与该node，再往下调用，则为更下层的node与当前node
     }
   }
 
@@ -363,7 +376,7 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
     NCCLCHECK(xmlGetAttrStr(xmlPci, "link_speed", &str));
 
     // Manage cases where speed was not indicated in /sys
-    if (width == 0) width = 16;
+    if (width == 0) width = 16; 
     NCCLCHECK(kvConvertToInt(str, &speed, kvDictPciGen)); // Values in 100Mbps, per lane (we want GB/s in the end)
 
     NCCLCHECK(ncclTopoConnectNodes(node, parent, LINK_PCI, width*speed/80.0));
@@ -479,9 +492,9 @@ ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem
   NCCLCHECK(xmlFindTag(xml, "system", &topNode)); //获取树状数据结构xml中的root节点
   for (int s=0; s<topNode->nSubs; s++) { //遍历topNode的子node
     struct ncclXmlNode* node = topNode->subs[s];
-    if (strcmp(node->name, "cpu") == 0) NCCLCHECK(ncclTopoAddCpu(node, *topoSystem));
+    if (strcmp(node->name, "cpu") == 0) NCCLCHECK(ncclTopoAddCpu(node, *topoSystem));//对于每个cpu
   }
-  NCCLCHECK(ncclTopoAddNvLinks(topNode, *topoSystem, NULL));
+  NCCLCHECK(ncclTopoAddNvLinks(topNode, *topoSystem, NULL));//若无，则不执行
 
   NCCLCHECK(ncclTopoConnectCpus(*topoSystem));
   NCCLCHECK(ncclTopoSortSystem(*topoSystem));

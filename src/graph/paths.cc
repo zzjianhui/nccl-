@@ -18,7 +18,7 @@ struct ncclTopoNodeList {
   int count;
 };
 
-/*  */
+/* 返回node中指向自己的paths */
 static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* node, int t, int64_t id, struct ncclTopoLinkList** path) {
   for (int i=0; i<system->nodes[t].count; i++) {//对于所有的cpu设备
     if (system->nodes[t].nodes[i].id == id) {
@@ -30,6 +30,17 @@ static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* 
   return ncclInternalError;
 }
 
+/*
+ * 这里假设baseNode为c1
+ * 1. 初始化c1 node的paths[c][c1]
+ * 2. 对c1 node所有的link指向的node（这里为remNode）
+ *    2.1. 为remNode的paths[c][c1]的list进行赋值，仅为paths[c][c1]->list[0]进行赋值，赋值为remNode指向c1的link
+ *    2.2. 为remNode的paths[c][c1]的count进行赋值，
+ *    2.3. 为remNode的paths[c][c1]的width进行赋值，
+ *    2.4. 为remNode的paths[c][c1]的type进行赋值
+ * 
+ * 这个代码似乎写的有点问题
+ */
 static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclTopoSystem* system) {
   //为baseNode->paths[baseNode.type]这个变量，为一维数组，进行初始化。
   if (baseNode->paths[baseNode->type] == NULL) {
@@ -41,9 +52,9 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
   struct ncclTopoNodeList nextNodeList;
   nodeList.count = 1; nodeList.list[0] = baseNode;
   nextNodeList.count = 0;
-  //将指向自己的path进行赋值
+  //将baseNode指向自己的path进行赋值（可以理解为cpu1->paths[CPU][cpu1]）
   struct ncclTopoLinkList* basePath;
-  NCCLCHECK(getPath(system, baseNode, baseNode->type, baseNode->id, &basePath));
+  NCCLCHECK(getPath(system, baseNode, baseNode->type, baseNode->id, &basePath));//返回的basePath为baseNode->paths[baseNode->type]指向自己的paths
   basePath->count = 0;
   basePath->width = LOC_WIDTH;
   basePath->type = PATH_LOC;
@@ -51,41 +62,44 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
   while (nodeList.count) {
     nextNodeList.count = 0;
     for (int n=0; n<nodeList.count; n++) {
-      struct ncclTopoNode* node = nodeList.list[n];
+      struct ncclTopoNode* node = nodeList.list[n];//为baseNode
       struct ncclTopoLinkList* path;
-      NCCLCHECK(getPath(system, node, baseNode->type, baseNode->id, &path));//获取node指向
-      for (int l=0; l<node->nlinks; l++) {
-        struct ncclTopoLink* link = node->links+l;
-        struct ncclTopoNode* remNode = link->remNode;
-        if (remNode->paths[baseNode->type] == NULL) {
+      NCCLCHECK(getPath(system, node, baseNode->type, baseNode->id, &path));//获取node指向自己的paths[node->type]
+      for (int l=0; l<node->nlinks; l++) {//对node中所有link进行遍历
+        struct ncclTopoLink* link = node->links+l;//获取link
+        struct ncclTopoNode* remNode = link->remNode;//获取link指向的remNode
+        if (remNode->paths[baseNode->type] == NULL) {//给remNode中path[baseNode->type]初始化
           NCCLCHECK(ncclCalloc(remNode->paths+baseNode->type, system->nodes[baseNode->type].count));
         }
-        struct ncclTopoLinkList* remPath;
+        struct ncclTopoLinkList* remPath;//获取remNode指向baseNode的paths[node->type]
         NCCLCHECK(getPath(system, remNode, baseNode->type, baseNode->id, &remPath));
-        float width = std::min(path->width, link->width);
+        float width = std::min(path->width, link->width);//
 
-        // allow routing through a GPU only as 1 hop
+        // allow routing through a GPU only as 1 hop，根据上下文代码，这段代码也不会执行
         if (node != baseNode && node->type == GPU &&
             (link->type != LINK_NVL || remNode->type != GPU || path->count > 1)) continue;
 
         if ((remPath->width == 0 || remPath->count > path->count) && remPath->width < width) {
-          // Find reverse link
+          //为remPath的list进行赋值
+          // Find reverse link，为remPath指向node的赋值
           for (int l=0; l<remNode->nlinks; l++) {
             if (remNode->links[l].remNode == node) {
-              remPath->list[0] = remNode->links+l;
+              remPath->list[0] = remNode->links+l;//赋值为remNode指向baseNode
               break;
             }
           }
-          if (remPath->list[0] == NULL) {
+          if (remPath->list[0] == NULL) {//没有找到指向node的
             WARN("Failed to find reverse path from remNode %d/%lx nlinks %d to node %d/%lx",
                  remNode->type, remNode->id, remNode->nlinks, node->type, node->id);
             return ncclInternalError;
           }
+          //为remPath的width进行赋值
           // Copy the rest of the path
           for (int i=0; i<path->count; i++) remPath->list[i+1] = path->list[i];
           remPath->count = path->count + 1;
           remPath->width = width;
 
+          //给remPath的type赋值
           // Start with path type = link type. PATH and LINK types are supposed to match.
           // Don't consider LINK_NET as we only care about the NIC->GPU path.
           int type = link->type == LINK_NET ? LINK_LOC : link->type;
@@ -98,6 +112,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
 
           remPath->type = std::max(path->type, type);
 
+          //nextNodeList似乎没有被调用？？？
           // Add to the list for the next iteration if not already in the list
           int i;
           for (i=0; i<nextNodeList.count; i++) if (nextNodeList.list[i] == remNode) break;
@@ -110,12 +125,13 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
   return ncclSuccess;
 }
 
+//输出当前gpu node的id，后面是到所有设备node的paths（到该node的link条数count，带宽width，距离type）
 static void printNodePaths(struct ncclTopoSystem* system, struct ncclTopoNode* node) {
   char line[1024];
 #ifdef ENABLE_TRACE
   INFO(NCCL_GRAPH, "Paths from %s/%lX :", topoNodeTypeStr[node->type], node->id);
 #else
-  sprintf(line, "%s/%lX :", topoNodeTypeStr[node->type], node->id);
+  sprintf(line, "%s/%lX :", topoNodeTypeStr[node->type], node->id);//输出当前gpu node的id
   int offset = strlen(line);
 #endif
   for (int t=0; t<NCCL_TOPO_NODE_TYPES; t++) {
@@ -142,22 +158,26 @@ static void printNodePaths(struct ncclTopoSystem* system, struct ncclTopoNode* n
 #endif
 }
 
+/*  */
 ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system) {
-  for (int i=0; i<system->nodes[GPU].count; i++) {
+  for (int i=0; i<system->nodes[GPU].count; i++) {//对于所有gpu node
     printNodePaths(system, system->nodes[GPU].nodes+i);
   }
-  for (int i=0; i<system->nodes[NET].count; i++) {
+  for (int i=0; i<system->nodes[NET].count; i++) {//对于所有net 设备
     printNodePaths(system, system->nodes[NET].nodes+i);
   }
   return ncclSuccess;
 }
 
+/*
+ * 得到离gpu最近的cpu，通过path[c].count最小的
+ */
 static ncclResult_t getLocalCpu(struct ncclTopoSystem* system, int gpu, int* retCpu) {
   // Find the closest CPU to a GPU
   int minHops = 0;
   int localCpu = -1;
-  struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[gpu].paths[CPU];
-  for (int c=0; c<system->nodes[CPU].count; c++) {
+  struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[gpu].paths[CPU];//获取gpu节点中paths[c]
+  for (int c=0; c<system->nodes[CPU].count; c++) {//遍历所有cpu节点，比较paths[c]的count，谁的count小，谁离该gpu近
     int hops = paths[c].count;
     if (minHops == 0 || hops < minHops) {
       localCpu = c;
@@ -173,8 +193,8 @@ static ncclResult_t getLocalCpu(struct ncclTopoSystem* system, int gpu, int* ret
 }
 
 static ncclResult_t addCpuStep(struct ncclTopoSystem* system, int c, int t1, int i1, int t2, int i2) {
-  struct ncclTopoNode* cpuNode = system->nodes[CPU].nodes+c;
-  struct ncclTopoNode* srcNode = system->nodes[t1].nodes+i1;
+  struct ncclTopoNode* cpuNode = system->nodes[CPU].nodes+c;//获取cpu node
+  struct ncclTopoNode* srcNode = system->nodes[t1].nodes+i1;//获取gpu node i1
 
   int l=0;
   // Node 1 -> CPU
@@ -352,7 +372,7 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int 
   return ncclSuccess;
 }
 
-/*  */
+/* 计算所有cpu，gpu，nic节点的paths */
 ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeerInfo* peerInfos) {
   // Precompute paths between GPUs/NICs.
 
@@ -373,11 +393,11 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
     for (int p=0; p<system->nodes[GPU].count; p++) {
       int p2p;
       NCCLCHECK(ncclTopoCheckP2p(system, system->nodes[GPU].nodes[p].id, system->nodes[GPU].nodes[g].id, &p2p, NULL, NULL));
-      if (p2p == 0) {//表示不能使用p2p
+      if (p2p == 0) {//gpu p和gpu g间不能使用p2p
         // Divert all traffic through the CPU
         int cpu;
-        NCCLCHECK(getLocalCpu(system, g, &cpu));
-        NCCLCHECK(addCpuStep(system, cpu, GPU, p, GPU, g));
+        NCCLCHECK(getLocalCpu(system, g, &cpu));//获取离g最近的cpu
+        NCCLCHECK(addCpuStep(system, cpu, GPU, p, GPU, g));//设置gpu p到gpu g间的路径（经过cpu）
       }
     }
 
@@ -417,16 +437,17 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
   return ncclSuccess;
 }
 
+/*  */
 ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* comm) {
-  int *domains;
-  int64_t *ids;
+  int *domains; //数组，元素个数为gpu个数
+  int64_t *ids; //数组，元素个数为gpu个数
   NCCLCHECK(ncclCalloc(&domains, system->nodes[GPU].count));
   NCCLCHECK(ncclCalloc(&ids, system->nodes[GPU].count));
   int myDomain = 0;
-  for (int g=0; g<system->nodes[GPU].count; g++) {
-    struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
-    domains[g] = g;
-    ids[g] = gpu->id;
+  for (int g=0; g<system->nodes[GPU].count; g++) {//遍历所有gpu
+    struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;//获得gpu node
+    domains[g] = g;  //存放gpu位置
+    ids[g] = gpu->id;//存放gpu id
     for (int p=0; p<g; p++) {
       if (gpu->paths[GPU][p].count > 0) {
         domains[g] = std::min(domains[g], domains[p]);
