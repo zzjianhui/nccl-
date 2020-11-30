@@ -14,7 +14,7 @@
 // max speed.
 static float getMaxWidth(struct ncclTopoSystem* system, struct ncclTopoNode* gpu, int type) {
   float maxWidth = 0.0;
-  for (int i=0; i<system->nodes[type].count; i++) {
+  for (int i=0; i<system->nodes[type].count; i++) {//遍历所有type类型的node
     struct ncclTopoLinkList* path = gpu->paths[type]+i;//从该gpu node到指定设备的路径
     float width = path->width;
     if (path->count == 0) continue;
@@ -34,8 +34,8 @@ static float getTotalWidth(struct ncclTopoSystem* system, struct ncclTopoNode* g
 
 /*
  * 设置system参数的maxWidth和totalWidth两个变量 
- * maxWidth表示，获取各个gpu node到net node的width取最大
- * totalWidth表示，每个gpu node到pci node的width总和
+ * maxWidth表示，获取各个gpu node到gpu node（在装备RDMA里，为gpu到net）的最大width
+ * totalWidth表示，每个gpu node下link的width总和
  */
 ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
   system->maxWidth = 0.0;
@@ -74,10 +74,10 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
   for (int step=0; step<path->count; step++) { //首先遍历该路径的所有link，若该路径的头节点为gpu，并且该路径沿途经过cpu，获得pciSpeed
     struct ncclTopoNode* node = path->list[step]->remNode;
     if (node->type == CPU) {
-      // Account for P2P inefficiency through Intel CPU RC，path->type为PHB？？？
+      // Account for P2P inefficiency through Intel CPU RC，path->type为PHB，仅为cpu到其pci下面的gpu
       if (path->type == PATH_PHB && start->type == GPU &&
           node->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 &&
-          node->cpu.vendor == NCCL_TOPO_CPU_VENDOR_INTEL) {
+          node->cpu.vendor == NCCL_TOPO_CPU_VENDOR_INTEL) {//在没有使用p2p通信情况下，并且在同一个cpu下的两块gpu间，若该cpu类型为intel的
         pciSpeed = INTEL_P2P_OVERHEAD(speed);
       }
     }
@@ -87,9 +87,9 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
   for (int step=0; step<maxSteps; step++) { //遍历所有路径
     struct ncclTopoLink* link = path->list[step];
     struct ncclTopoLink* revLink = NULL;
-    float fwSpeed = link->type == LINK_PCI ? pciSpeed : speed;//仅在pci -> cpu的路径上，才会选择pciSpeed
+    float fwSpeed = link->type == LINK_PCI ? pciSpeed : speed;//仅在pci -> cpu的路径上，才会选择pciSpeed（也就是gpu->cpu或cpu->gpu）
     float revSpeed = 0;
-    if (link->remNode->type == GPU && link->remNode->gpu.cudaCompCap < 80 && start->type != GPU) {
+    if (link->remNode->type == GPU && link->remNode->gpu.cudaCompCap < 80 && start->type != GPU) {//若路径不是从gpu开始，并且路径指向gpu
       if (revLink == NULL) NCCLCHECK(findRevLink(node, link->remNode, &revLink));
       revSpeed += fwSpeed/8;
     }
@@ -109,15 +109,15 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
 // Try to go from node type1/index1 to no type2/index2. mult indicates whether we are counting the bandwidth (1) or undoing (-1).
 static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, int type1, int index1, int type2, int index2, int mult, struct ncclTopoNode** node) {
   // First handle easy cases
-  *node = system->nodes[type2].nodes+index2;
-  if (type1 == -1) return ncclSuccess;
-  struct ncclTopoNode* node1 = system->nodes[type1].nodes+index1;
-  struct ncclTopoLinkList* path = node1->paths[type2]+index2;
-  if (path->count == 0 ) return ncclSuccess;
+  *node = system->nodes[type2].nodes+index2;//获取type2和index2定位的node
+  if (type1 == -1) return ncclSuccess; //若type1=-1，返回
+  struct ncclTopoNode* node1 = system->nodes[type1].nodes+index1;//获取type1和index1定位的node
+  struct ncclTopoLinkList* path = node1->paths[type2]+index2;//获取node1到node2的paths
+  if (path->count == 0 ) return ncclSuccess;//如果node==node2，直接返回
 
   // Now check link type
   *node = NULL;
-  int intra = type1 == GPU && type2 == GPU; //当type1和type2都为GPU
+  int intra = type1 == GPU && type2 == GPU; //当type1和type2都为GPU，将intra设置为1
   float speed = intra ? graph->speedIntra : graph->speedInter;
   int type = intra ? graph->typeIntra : graph->typeInter;
 
@@ -141,8 +141,9 @@ rewind:
   return ncclSuccess;
 }
 
+//获取该gpu node到其他node的width
 static int gpuPciWidth(struct ncclTopoNode* gpu) {
-  for (int l=0; l<gpu->nlinks; l++) {
+  for (int l=0; l<gpu->nlinks; l++) {//遍历该gpu node下所有link
     struct ncclTopoLink* gpuLink = gpu->links+l;
     if (gpuLink->type != LINK_PCI) continue;
     struct ncclTopoNode* pci = gpuLink->remNode;
@@ -285,9 +286,9 @@ ncclResult_t ncclTopoReplayGetGpu(struct ncclTopoSystem* system, struct ncclTopo
 ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, struct ncclTopoNode* gpu, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time);
 
 ncclResult_t ncclTopoSearchTryGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time, int type, int index, int g) {
-  const uint64_t flag = 1ULL<<(graph->nChannels);
+  const uint64_t flag = 1ULL<<(graph->nChannels);//为1
   struct ncclTopoNode* gpu;
-  NCCLCHECK(ncclTopoFollowPath(system, graph, type, index, GPU, g, 1, &gpu));
+  NCCLCHECK(ncclTopoFollowPath(system, graph, type, index, GPU, g, 1, &gpu));//返回第一个gpu设备node
   if (gpu) {
     gpu->used ^= flag;
     NCCLCHECK(ncclTopoSearchRecGpu(system, graph, saveGraph, gpu, step, backToNet, backToFirstRank, forcedOrder, time));
@@ -491,7 +492,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
  *                                       `--> NET n (or m if crossNic)
  */
 ncclResult_t ncclTopoSearchParams(struct ncclTopoSystem* system, int pattern, int* backToNet, int* backToFirstRank) {
-  if (system->nodes[NET].count) {
+  if (system->nodes[NET].count) {//不是多node的集群，该值为0
     if (pattern == NCCL_TOPO_PATTERN_RING) *backToNet = system->nodes[GPU].count-1;
     else if (pattern == NCCL_TOPO_PATTERN_SPLIT_TREE) *backToNet = 1;
     else *backToNet = 0;
@@ -506,8 +507,8 @@ ncclResult_t ncclTopoSearchParams(struct ncclTopoSystem* system, int pattern, in
 
 ncclResult_t ncclTopoSearchRec(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, int* time) {
   int backToNet, backToFirstRank;
-  NCCLCHECK(ncclTopoSearchParams(system, graph->pattern, &backToNet, &backToFirstRank));
-  if (system->nodes[NET].count) {
+  NCCLCHECK(ncclTopoSearchParams(system, graph->pattern, &backToNet, &backToFirstRank));//设置参数backToNet和backToFirstRank
+  if (system->nodes[NET].count) {//如果不是集群上，这个值为0
     // Start from NET
     ncclTopoSearchRecNet(system, graph, saveGraph, backToNet, backToFirstRank, time);
   } else {
@@ -658,9 +659,12 @@ ncclResult_t ncclTopoGetXmlFromGraphs(int ngraphs, struct ncclTopoGraph** graphs
 float speedArray[] = { 42.0, 30.0, 24.0, 21.0, 18.0, 15.0, 12.0, 10.0, 9.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.4, 1.2, 0.24, 0.12 };
 #define NSPEEDS (sizeof(speedArray)/sizeof(float))
 
+/*
+ * 
+ */
 ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph) {
   int ngpus = system->nodes[GPU].count;//获取gpu的个数
-  int crossNic = (system->nodes[NET].count > 1) && graph->crossNic ? 1 : 0;
+  int crossNic = (system->nodes[NET].count > 1) && graph->crossNic ? 1 : 0;//0
   graph->speedIntra = graph->speedInter = 0;
   if (graph->crossNic == 2) graph->crossNic = 0; //这段代码是否可以删除
   graph->typeIntra = ngpus == 1 ? PATH_LOC : PATH_NVL;//若GPU个数为1
@@ -683,7 +687,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
 
   if (ngpus == 1) if (graph->pattern != NCCL_TOPO_PATTERN_RING) graph->pattern = NCCL_TOPO_PATTERN_TREE;
 
-  // SPLIT_TREE works better on older archs.
+  // SPLIT_TREE works better on older archs.，较旧的archs，使用SPLIT_TREE
   int ccMin;
   NCCLCHECK(ncclTopoGetCompCap(system, &ccMin, NULL));//获取所有GPU中SM最小值
   if (ccMin < 80 && graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE) graph->pattern = NCCL_TOPO_PATTERN_SPLIT_TREE;
@@ -695,7 +699,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   int pass = 1;
   int speedIndex = 0;
   while (speedArray[speedIndex] > system->maxWidth && speedIndex < NSPEEDS-1) speedIndex++;
-  tmpGraph.speedIntra = tmpGraph.speedInter = speedArray[speedIndex];
+  tmpGraph.speedIntra = tmpGraph.speedInter = speedArray[speedIndex];//在zx002机器上得到的值为0.24
   int64_t globalTimeout = NCCL_SEARCH_GLOBAL_TIMEOUT;
 
 search:

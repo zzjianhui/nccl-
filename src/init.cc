@@ -645,7 +645,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   ringGraph.crossNic = ncclParamCrossNic();
   ringGraph.collNet = 0;
   ringGraph.minChannels = 1;
-  ringGraph.maxChannels = MAXCHANNELS/2;
+  ringGraph.maxChannels = MAXCHANNELS/2;//16
   NCCLCHECK(ncclTopoCompute(comm->topo, &ringGraph));
   NCCLCHECK(ncclTopoPrintGraph(comm->topo, &ringGraph));
 

@@ -33,7 +33,7 @@ static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* 
 /*
  * 这里假设baseNode为c1
  * 1. 初始化c1 node的paths[c][c1]
- * 2. 对c1 node所有的link指向的node（这里为remNode）
+ * 2. 对c1 node中的所有link（这些link假设指向node）（这里为remNode）
  *    2.1. 为remNode的paths[c][c1]的list进行赋值，仅为paths[c][c1]->list[0]进行赋值，赋值为remNode指向c1的link
  *    2.2. 为remNode的paths[c][c1]的count进行赋值，
  *    2.3. 为remNode的paths[c][c1]的width进行赋值，
@@ -192,17 +192,20 @@ static ncclResult_t getLocalCpu(struct ncclTopoSystem* system, int gpu, int* ret
   return ncclSuccess;
 }
 
+/*
+ * 修改从i1到i2的路径（经过cpu）
+ */
 static ncclResult_t addCpuStep(struct ncclTopoSystem* system, int c, int t1, int i1, int t2, int i2) {
   struct ncclTopoNode* cpuNode = system->nodes[CPU].nodes+c;//获取cpu node
   struct ncclTopoNode* srcNode = system->nodes[t1].nodes+i1;//获取gpu node i1
 
   int l=0;
-  // Node 1 -> CPU
+  // Node 1 -> CPU，将Node1到CPU的路径，写入到Node1到Node2的路径中
   for (int i=0; i<srcNode->paths[CPU][c].count; i++) srcNode->paths[t2][i2].list[l++] = srcNode->paths[CPU][c].list[i];
-  // CPU -> Node 2
+  // CPU -> Node 2，将CPU到Node2的路径，写入到Node1到Node2的路径中
   for (int i=0; i<cpuNode->paths[t2][i2].count; i++) srcNode->paths[t2][i2].list[l++] = cpuNode->paths[t2][i2].list[i];
 
-  // Update path characteristics
+  // Update path characteristics，更新Node1到Node2的paths的count，type，width
   srcNode->paths[t2][i2].count = l;
   srcNode->paths[t2][i2].type = std::max(srcNode->paths[CPU][c].type, cpuNode->paths[t2][i2].type);
   srcNode->paths[t2][i2].width = std::min(srcNode->paths[CPU][c].width, cpuNode->paths[t2][i2].width);
@@ -407,9 +410,10 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
     for (int p=0; p<system->nodes[GPU].count; p++) {
       if (p == g) continue;
       struct ncclPeerInfo* srcInfo = peerInfos+system->nodes[GPU].nodes[p].gpu.rank;
+      //检测两gpu间能否使用共享内存通信。不可以，则shm返回0
       int shm;
       NCCLCHECK(ncclTransports[TRANSPORT_SHM].canConnect(&shm, system, NULL, srcInfo, dstInfo));
-      if (shm == 0) {
+      if (shm == 0) {//不可以进行共享内存通信，则gpu p到gpu g的路径不通
         // Mark this peer as inaccessible. We'll trim it later.
         system->nodes[GPU].nodes[p].paths[GPU][g].count = 0;
       }

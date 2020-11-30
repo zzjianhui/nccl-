@@ -39,7 +39,7 @@ NCCL_PARAM(ShmDisable, "SHM_DISABLE", 0);
 ncclResult_t shmCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
   *ret = 0;
 
-  if (ncclParamShmDisable() == 1) return ncclSuccess;
+  if (ncclParamShmDisable() == 1) return ncclSuccess;//若环境变量禁止使用shm，ret返回0
 
   // Same host?
   TRACE(NCCL_INIT|NCCL_SHM, "peer1 hostHash %lx peer2 hostHash %lx", info1->hostHash, info2->hostHash);
